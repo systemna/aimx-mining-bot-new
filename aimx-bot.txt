@@ -1,0 +1,75 @@
+from flask import Flask, request, jsonify, render_template
+import requests
+import os
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+import asyncio
+
+# إعداد المتغيرات البيئية
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+API_URL = os.getenv("BLOCKCHAIN_API_URL")  # API الخاص بالعقد الذكي
+
+# إعداد البوت
+bot = Bot(token=TOKEN)
+dp = Dispatcher(bot)
+
+# إعداد Flask لتشغيل API والواجهة
+app = Flask(__name__)
+users = {}  # قاعدة بيانات بسيطة لحفظ أرصدة المستخدمين
+
+@app.route("/")
+def dashboard():
+    return render_template("index.html", users=users)
+
+@app.route("/mine", methods=["POST"])
+def mine():
+    data = request.json
+    user_id = str(data.get("user_id"))
+    amount = 10  # كمية التعدين الافتراضية
+    
+    if user_id not in users:
+        users[user_id] = 0
+    
+    users[user_id] += amount
+    return jsonify({"message": "Mining successful", "amount": amount, "balance": users[user_id]})
+
+@app.route("/balance/<user_id>", methods=["GET"])
+def balance(user_id):
+    balance = users.get(user_id, 0)
+    return jsonify({"balance": balance})
+
+# إعداد لوحة المفاتيح في تليجرام
+keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+keyboard.add(KeyboardButton("🎛 الحساب"), KeyboardButton("⛏ التعدين"))
+
+@dp.message_handler(commands=['start'])
+async def start(message: types.Message):
+    await message.reply("👋 مرحبًا بك في بوت تعدين AIMX! استخدم الأزرار أدناه للتحكم.", reply_markup=keyboard)
+
+@dp.message_handler(lambda message: message.text == "⛏ التعدين")
+async def mine_command(message: types.Message):
+    user_id = message.from_user.id
+    response = requests.post(f"{API_URL}/mine", json={"user_id": user_id})
+    if response.status_code == 200:
+        data = response.json()
+        await message.reply(f"🎉 لقد حصلت على {data['amount']} AIMX! رصيدك الحالي: {data['balance']} AIMX")
+    else:
+        await message.reply("❌ حدث خطأ أثناء التعدين.")
+
+@dp.message_handler(lambda message: message.text == "🎛 الحساب")
+async def balance_command(message: types.Message):
+    user_id = message.from_user.id
+    response = requests.get(f"{API_URL}/balance/{user_id}")
+    if response.status_code == 200:
+        data = response.json()
+        await message.reply(f"💰 رصيدك الحالي: {data['balance']} AIMX")
+    else:
+        await message.reply("❌ لا يمكن جلب الرصيد.")
+
+async def main():
+    await dp.start_polling()
+
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.create_task(main())
+    app.run(host="0.0.0.0", port=5000)
